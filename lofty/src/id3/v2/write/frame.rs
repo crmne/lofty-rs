@@ -277,6 +277,8 @@ fn verify_frame(frame: &Frame<'_>) -> Result<(), FrameEncodingError> {
 		| ("WFED" | "GRP1" | "MVNM" | "MVIN", Frame::Text { .. })
 		| ("TDEN" | "TDOR" | "TDRC" | "TDRL" | "TDTG", Frame::Timestamp(_))
 		| ("RVA2", Frame::RelativeVolumeAdjustment(_))
+		| ("OWNE", Frame::Ownership(_))
+		| ("ETCO", Frame::EventTimingCodes(_))
 		| ("PRIV", Frame::Private(_))
 		| ("CHAP", Frame::Chapter(_))
 		| ("CTOC", Frame::TableOfContents(_))

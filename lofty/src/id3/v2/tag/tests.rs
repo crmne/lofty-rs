@@ -1579,6 +1579,49 @@ fn single_value_frame() {
 	assert_eq!(artist_tag, "120");
 }
 
+#[test_log::test]
+fn etco_and_owne_round_trip() {
+	use crate::TextEncoding;
+	use crate::id3::v2::{
+		Event, EventTimingCodesFrame, EventType, Frame, OwnershipFrame, TimestampFormat,
+	};
+
+	let mut tag = Id3v2Tag::default();
+	tag.insert(Frame::EventTimingCodes(EventTimingCodesFrame::new(
+		TimestampFormat::MS,
+		vec![
+			Event {
+				event_type: EventType::IntroStart,
+				timestamp: 1500,
+			},
+			Event {
+				event_type: EventType::OutroStart,
+				timestamp: 180_000,
+			},
+		],
+	)));
+	tag.insert(Frame::Ownership(OwnershipFrame::new(
+		TextEncoding::Latin1,
+		"USD1000",
+		"19840407",
+		"FooBar",
+	)));
+
+	// Both frames were rejected by the writer: "a value of type 'EventTimingCodes'
+	// cannot be written under this ID"
+	for use_id3v23 in [false, true] {
+		let re_read = dump_and_re_read(&tag, WriteOptions::default().use_id3v23(use_id3v23));
+		assert_eq!(re_read.len(), 2);
+		for frame in tag.iter() {
+			assert!(
+				re_read
+					.iter()
+					.any(|f| format!("{f:?}") == format!("{frame:?}"))
+			);
+		}
+	}
+}
+
 macro_rules! popm_tests {
 		(
 			$($tagger_name:ident => $(($tagger_value:expr, $mapped_value:literal)),+);* $(;)?
