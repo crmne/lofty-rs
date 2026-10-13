@@ -4,7 +4,7 @@ use crate::id3::v2::frame::content::verify_encoding;
 use crate::id3::v2::frame::error::FrameEncodingError;
 use crate::id3::v2::header::Id3v2Version;
 use crate::id3::v2::{FrameFlags, FrameHeader, FrameId};
-use crate::tag::items::Lang;
+use crate::tag::items::{Lang, UNKNOWN_LANGUAGE};
 use crate::util::text::{
 	DecodeTextResult, TextDecodeOptions, TextEncoding, decode_text,
 	utf16_decode_terminated_maybe_bom,
@@ -15,6 +15,24 @@ use std::hash::{Hash, Hasher};
 use std::io::Read;
 
 use byteorder::ReadBytesExt;
+
+/// The language to write for `language`
+///
+/// ID3v2 language fields hold an ISO-639-2 code. Other values, such as the three zero bytes some
+/// taggers write, are read as they are, and written as [`UNKNOWN_LANGUAGE`] (`XXX`) so that a tag
+/// read from a file can always be written back.
+pub(crate) fn writable_language(language: Lang) -> Lang {
+	if language.iter().all(u8::is_ascii_alphabetic) {
+		return language;
+	}
+
+	log::warn!(
+		"Writing invalid frame language {} as {}",
+		language.escape_ascii(),
+		UNKNOWN_LANGUAGE.escape_ascii()
+	);
+	UNKNOWN_LANGUAGE
+}
 
 // Generic struct for a text frame that has a language
 //
@@ -93,13 +111,9 @@ impl LanguageFrame {
 			encoding = encoding.to_id3v23();
 		}
 
-		if language.iter().any(|c| !c.is_ascii_alphabetic()) {
-			return Err(FrameEncodingError::invalid_language(language));
-		}
-
 		let mut bytes = vec![encoding as u8];
 
-		bytes.extend(language);
+		bytes.extend(writable_language(language));
 		bytes.extend(
 			encoding
 				.encode(description, true, write_options.lossy_text_encoding)?
@@ -217,10 +231,11 @@ impl<'a> CommentFrame<'a> {
 	///
 	/// NOTE: This does not include a frame header
 	///
+	/// A `language` that is not three ASCII letters is written as [`UNKNOWN_LANGUAGE`].
+	///
 	/// # Errors
 	///
-	/// * `language` is not exactly 3 bytes
-	/// * `language` contains invalid characters (Only `'a'..='z'` and `'A'..='Z'` allowed)
+	/// * [`WriteOptions::lossy_text_encoding()`] is disabled and the content cannot be encoded in the specified [`TextEncoding`].
 	pub fn as_bytes(&self, write_options: WriteOptions) -> Result<Vec<u8>, FrameEncodingError> {
 		LanguageFrame::create_bytes(
 			self.encoding,
@@ -350,10 +365,11 @@ impl<'a> UnsynchronizedTextFrame<'a> {
 	///
 	/// NOTE: This does not include a frame header
 	///
+	/// A `language` that is not three ASCII letters is written as [`UNKNOWN_LANGUAGE`].
+	///
 	/// # Errors
 	///
-	/// * `language` is not exactly 3 bytes
-	/// * `language` contains invalid characters (Only `'a'..='z'` and `'A'..='Z'` allowed)
+	/// * [`WriteOptions::lossy_text_encoding()`] is disabled and the content cannot be encoded in the specified [`TextEncoding`].
 	pub fn as_bytes(&self, write_options: WriteOptions) -> Result<Vec<u8>, FrameEncodingError> {
 		LanguageFrame::create_bytes(
 			self.encoding,

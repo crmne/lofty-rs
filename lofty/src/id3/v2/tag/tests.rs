@@ -1622,6 +1622,43 @@ fn etco_and_owne_round_trip() {
 	}
 }
 
+#[test_log::test]
+fn invalid_language_is_read_and_written_as_unknown() {
+	use crate::tag::items::UNKNOWN_LANGUAGE;
+
+	// An ID3v2.4 tag with a COMM and a USLT frame whose language is three zero bytes
+	let mut frames = Vec::new();
+	for (id, content) in [(b"COMM", b"A comment"), (b"USLT", b"Lyrics..!")] {
+		frames.extend(id);
+		frames.extend([0, 0, 0, 14, 0, 0]);
+		frames.extend([0, 0, 0, 0, 0]); // Latin-1, language 00 00 00, empty description
+		frames.extend(content);
+	}
+	let mut bytes = b"ID3\x04\x00\x00\x00\x00\x00".to_vec();
+	bytes.push(frames.len() as u8);
+	bytes.extend(frames);
+
+	// Reading keeps the language as it is, even in strict mode
+	let tag = read_tag_with_options(
+		&bytes,
+		ParseOptions::new().parsing_mode(ParsingMode::Strict),
+	);
+	assert_eq!(tag.comments().next().unwrap().language, [0; 3]);
+	assert_eq!(tag.unsync_text().next().unwrap().language, [0; 3]);
+
+	// Writing used to fail with "invalid frame language found"
+	for use_id3v23 in [false, true] {
+		let re_read = dump_and_re_read(&tag, WriteOptions::default().use_id3v23(use_id3v23));
+		let comment = re_read.comments().next().unwrap();
+		assert_eq!(comment.language, UNKNOWN_LANGUAGE);
+		assert_eq!(comment.description, "");
+		assert_eq!(comment.content, "A comment");
+		let lyrics = re_read.unsync_text().next().unwrap();
+		assert_eq!(lyrics.language, UNKNOWN_LANGUAGE);
+		assert_eq!(lyrics.content, "Lyrics..!");
+	}
+}
+
 macro_rules! popm_tests {
 		(
 			$($tagger_name:ident => $(($tagger_value:expr, $mapped_value:literal)),+);* $(;)?

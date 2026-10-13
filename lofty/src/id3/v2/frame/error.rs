@@ -52,16 +52,6 @@ impl FrameParseError {
 		)
 	}
 
-	pub(crate) fn invalid_language(language: [u8; 3]) -> Self {
-		Self::message(
-			None,
-			format!(
-				"invalid frame language found: {} (expected 3 ascii characters)",
-				language.escape_ascii()
-			),
-		)
-	}
-
 	pub(crate) fn unsupported_version(version: Id3v2Version) -> Self {
 		Self::message(
 			None,
@@ -165,16 +155,6 @@ impl FrameEncodingError {
 		Self::message(
 			Some(id),
 			"encountered an encrypted frame without a data length indicator",
-		)
-	}
-
-	pub(crate) fn invalid_language(language: [u8; 3]) -> Self {
-		Self::message(
-			None,
-			format!(
-				"invalid frame language found: {} (expected 3 ascii characters)",
-				language.escape_ascii()
-			),
 		)
 	}
 

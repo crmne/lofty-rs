@@ -2,6 +2,7 @@ use crate::config::WriteOptions;
 use crate::error::TooMuchDataError;
 use crate::id3::v2::error::FrameParseError;
 use crate::id3::v2::frame::error::FrameEncodingError;
+use crate::id3::v2::items::language_frame::writable_language;
 use crate::id3::v2::{FrameFlags, FrameHeader, FrameId};
 use crate::util::text::{
 	DecodeTextResult, TextDecodeOptions, TextEncoding, decode_text,
@@ -178,7 +179,6 @@ impl SynchronizedTextFrame<'_> {
 	/// # Errors
 	///
 	/// * Not enough data
-	/// * Invalid language
 	/// * [`BadTimestampFormatError`]
 	/// * [`BadSyncTextContentTypeError`]
 	/// * [`TextDecodingError`]
@@ -196,9 +196,6 @@ impl SynchronizedTextFrame<'_> {
 
 			let encoding = TextEncoding::try_from(data[0])?;
 			let language: [u8; 3] = data[1..4].try_into().unwrap();
-			if language.iter().any(|c| !c.is_ascii_alphabetic()) {
-				return Err(FrameParseError::invalid_language(language));
-			}
 			let timestamp_format = TimestampFormat::try_from(data[4])?;
 			let content_type = SyncTextContentType::try_from(data[5])?;
 
@@ -287,14 +284,8 @@ impl SynchronizedTextFrame<'_> {
 	/// # Errors
 	///
 	/// * `content`'s length > [`u32::MAX`]
-	/// * `language` is not exactly 3 bytes
-	/// * `language` contains invalid characters (Only `'a'..='z'` and `'A'..='Z'` allowed)
 	/// * [`WriteOptions::lossy_text_encoding()`] is disabled and the content cannot be encoded in the specified [`TextEncoding`].
 	pub fn as_bytes(&self, write_options: WriteOptions) -> Result<Vec<u8>, FrameEncodingError> {
-		if !self.language.iter().all(u8::is_ascii_alphabetic) {
-			return Err(FrameEncodingError::invalid_language(self.language));
-		}
-
 		let mut encoding = self.encoding;
 		if write_options.use_id3v23 {
 			encoding = encoding.to_id3v23();
@@ -302,7 +293,7 @@ impl SynchronizedTextFrame<'_> {
 
 		let mut data = vec![self.encoding as u8];
 
-		data.write_all(&self.language)?;
+		data.write_all(&writable_language(self.language))?;
 		data.write_u8(self.timestamp_format as u8)?;
 		data.write_u8(self.content_type as u8)?;
 
@@ -392,5 +383,21 @@ mod tests {
 			crate::tag::utils::test_utils::read_path("tests/tags/assets/id3v2/test_utf16.sylt");
 
 		assert_eq!(encoded, expected_bytes);
+	}
+
+	#[test_log::test]
+	fn sylt_invalid_language() {
+		let mut bytes =
+			crate::tag::utils::test_utils::read_path("tests/tags/assets/id3v2/test.sylt");
+		bytes[1..4].copy_from_slice(&[0; 3]);
+
+		// Read as it is...
+		let parsed_sylt = SynchronizedTextFrame::parse(&bytes, FrameFlags::default()).unwrap();
+		assert_eq!(parsed_sylt.language, [0; 3]);
+
+		// ...and written as the unknown language
+		let encoded = parsed_sylt.as_bytes(WriteOptions::default()).unwrap();
+		assert_eq!(&encoded[1..4], b"XXX");
+		assert_eq!(encoded[4..], bytes[4..]);
 	}
 }
