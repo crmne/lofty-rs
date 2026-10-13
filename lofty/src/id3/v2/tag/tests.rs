@@ -1841,6 +1841,32 @@ fn id3v23_tag_flags() {
 	assert!(re_read.flags().restrictions.is_none());
 }
 
+#[test_log::test]
+fn id3v24_extended_header_round_trip() {
+	use crate::id3::v2::{TagRestrictions, TagSizeRestrictions};
+
+	let mut restrictions = TagRestrictions::default();
+	restrictions.size = TagSizeRestrictions::S_32F_4K;
+
+	let mut tag = Id3v2Tag::default();
+	tag.set_title(String::from("Title"));
+	tag.set_flags(Id3v2TagFlags {
+		experimental: true,
+		crc: true,
+		restrictions: Some(restrictions),
+		..Id3v2TagFlags::default()
+	});
+
+	let bytes = dump(&tag, WriteOptions::default());
+	assert_eq!(bytes[5], 0x60);
+
+	let re_read = read_raw_tag(&bytes);
+	assert_eq!(re_read.title().as_deref(), Some("Title"));
+	assert!(re_read.flags().experimental);
+	assert!(re_read.flags().crc);
+	assert_eq!(re_read.flags().restrictions, Some(restrictions));
+}
+
 macro_rules! popm_tests {
 		(
 			$($tagger_name:ident => $(($tagger_value:expr, $mapped_value:literal)),+);* $(;)?

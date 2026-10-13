@@ -223,11 +223,15 @@ fn create_tag_header(
 
 	let extended_header = flags.crc || flags.restrictions.is_some();
 
-	let tag_flags = if is_id3v23 {
+	let mut tag_flags = if is_id3v23 {
 		flags.as_id3v23_byte()
 	} else {
 		flags.as_id3v24_byte()
 	};
+
+	if extended_header {
+		tag_flags |= 0x40;
+	}
 
 	header.write_u8(tag_flags)?;
 	header.write_u32::<BigEndian>(0)?;
