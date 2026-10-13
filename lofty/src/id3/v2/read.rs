@@ -45,72 +45,87 @@ where
 	// Throw away the rest of the tag (padding, bad frames)
 	std::io::copy(&mut tag_bytes, &mut std::io::sink())?;
 
-	// Construct TDRC frame from TYER, TDAT, and TIME frames
-	if parse_options.implicit_conversions && header.version == Id3v2Version::V3 {
-		construct_tdrc_from_v3(&mut ret);
+	// Construct TDRC frame from TYER, TDAT, and TIME frames (TYE, TDA, and TIM in ID3v2.2)
+	if parse_options.implicit_conversions {
+		match header.version {
+			Id3v2Version::V2 => construct_tdrc_from_split_date(
+				&mut ret,
+				&FrameId::Outdated(Cow::Borrowed("TDA")),
+				&FrameId::Outdated(Cow::Borrowed("TIM")),
+			),
+			Id3v2Version::V3 => construct_tdrc_from_split_date(
+				&mut ret,
+				&FrameId::Valid(Cow::Borrowed("TDAT")),
+				&FrameId::Valid(Cow::Borrowed("TIME")),
+			),
+			Id3v2Version::V4 => {},
+		}
 	}
 
 	Ok(ret)
 }
 
-fn construct_tdrc_from_v3(tag: &mut Id3v2Tag) {
+/// Merge the date and time frames of ID3v2.2 and ID3v2.3 into the TDRC frame converted from the
+/// year frame
+fn construct_tdrc_from_split_date(
+	tag: &mut Id3v2Tag,
+	date_id: &FrameId<'_>,
+	time_id: &FrameId<'_>,
+) {
 	const TDRC: FrameId<'_> = FrameId::Valid(Cow::Borrowed("TDRC"));
-	const TDAT: FrameId<'_> = FrameId::Valid(Cow::Borrowed("TDAT"));
-	const TIME: FrameId<'_> = FrameId::Valid(Cow::Borrowed("TIME"));
 
-	// Our TYER frame gets converted to TDRC earlier
-	let Some(year_frame) = tag.remove(&TDRC).next() else {
-		return;
+	// Our TYER (TYE) frame gets converted to TDRC earlier
+	let (year, encoding) = match tag.get(&TDRC) {
+		Some(Frame::Timestamp(year_frame)) => {
+			// This is not a TYER frame
+			if year_frame.timestamp.month.is_some() {
+				return;
+			}
+
+			(year_frame.timestamp.year, year_frame.encoding)
+		},
+		Some(_) => {
+			log::warn!("TYER frame is not a timestamp frame, retaining.");
+			return;
+		},
+		None => return,
 	};
-
-	let Frame::Timestamp(year_frame) = year_frame else {
-		log::warn!("TYER frame is not a timestamp frame, retaining.");
-		tag.insert(year_frame);
-		return;
-	};
-
-	// This is not a TYER frame
-	if year_frame.timestamp.month.is_some() {
-		return;
-	}
 
 	let mut tdrc = Timestamp {
-		year: year_frame.timestamp.year,
+		year,
 		..Timestamp::default()
 	};
 
-	let mut date_used = false;
 	let mut time_used = false;
 	'build: {
-		let Some(date) = tag.get_text(&TDAT) else {
-			break 'build;
+		let Some(date) = tag.get_text(date_id) else {
+			return;
 		};
 
 		if date.len() != 4 || !date.is_ascii() {
-			log::warn!("Invalid TDAT frame, retaining.");
-			break 'build;
+			log::warn!("Invalid {date_id} frame, retaining.");
+			return;
 		}
 
 		let (Ok(day), Ok(month)) = (date[..2].parse::<u8>(), date[2..].parse::<u8>()) else {
-			log::warn!("Invalid TDAT frame, retaining.");
-			break 'build;
+			log::warn!("Invalid {date_id} frame, retaining.");
+			return;
 		};
 
 		tdrc.month = Some(month);
 		tdrc.day = Some(day);
-		date_used = true;
 
-		let Some(time) = tag.get_text(&TIME) else {
+		let Some(time) = tag.get_text(time_id) else {
 			break 'build;
 		};
 
 		if time.len() != 4 || !time.is_ascii() {
-			log::warn!("Invalid TIME frame, retaining.");
+			log::warn!("Invalid {time_id} frame, retaining.");
 			break 'build;
 		}
 
 		let (Ok(hour), Ok(minute)) = (time[..2].parse::<u8>(), time[2..].parse::<u8>()) else {
-			log::warn!("Invalid TIME frame, retaining.");
+			log::warn!("Invalid {time_id} frame, retaining.");
 			break 'build;
 		};
 
@@ -119,18 +134,13 @@ fn construct_tdrc_from_v3(tag: &mut Id3v2Tag) {
 		time_used = true;
 	}
 
-	tag.insert(Frame::Timestamp(TimestampFrame::new(
-		FrameId::Valid(Cow::Borrowed("TDRC")),
-		year_frame.encoding,
-		tdrc,
-	)));
+	let _ = tag.remove(&TDRC);
+	tag.insert(Frame::Timestamp(TimestampFrame::new(TDRC, encoding, tdrc)));
 
-	if date_used {
-		let _ = tag.remove(&TDAT);
-	}
+	let _ = tag.remove(date_id);
 
 	if time_used {
-		let _ = tag.remove(&TIME);
+		let _ = tag.remove(time_id);
 	}
 }
 

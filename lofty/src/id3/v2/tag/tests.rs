@@ -1891,6 +1891,60 @@ fn id3v24_extended_header_round_trip() {
 	assert_eq!(re_read.flags().restrictions, Some(restrictions));
 }
 
+#[test_log::test]
+fn id3v22_tda_and_tim_merged_into_tdrc() {
+	let body = [
+		raw_text_frame(2, b"TT2", "Title"),
+		raw_text_frame(2, b"TYE", "1999"),
+		raw_text_frame(2, b"TDA", "1503"),
+		raw_text_frame(2, b"TIM", "1230"),
+	]
+	.concat();
+	let tag = read_raw_tag(&raw_tag(2, 0, &body));
+
+	let expected = Timestamp {
+		year: 1999,
+		month: Some(3),
+		day: Some(15),
+		hour: Some(12),
+		minute: Some(30),
+		second: None,
+	};
+	assert_eq!(tag.len(), 2);
+	let Some(Frame::Timestamp(tdrc)) = tag.get(&FrameId::Valid(Cow::Borrowed("TDRC"))) else {
+		panic!("Expected a TDRC frame");
+	};
+	assert_eq!(tdrc.timestamp, expected);
+
+	// The date and time used to be lost on save, since TDA and TIM cannot be written
+	for use_id3v23 in [false, true] {
+		let re_read = dump_and_re_read(&tag, WriteOptions::default().use_id3v23(use_id3v23));
+		let Some(Frame::Timestamp(tdrc)) = re_read.get(&FrameId::Valid(Cow::Borrowed("TDRC")))
+		else {
+			panic!("Expected a TDRC frame");
+		};
+		assert_eq!(tdrc.timestamp, expected);
+	}
+}
+
+#[test_log::test]
+fn id3v23_full_tdrc_is_retained() {
+	// TDRC is not an ID3v2.3 frame, but some taggers write it. It used to be discarded when
+	// looking for a TYER frame to merge TDAT and TIME into.
+	let body = [
+		raw_text_frame(3, b"TIT2", "Title"),
+		raw_text_frame(3, b"TDRC", "2024-06-03"),
+	]
+	.concat();
+	let tag = read_raw_tag(&raw_tag(3, 0, &body));
+
+	let Some(Frame::Timestamp(tdrc)) = tag.get(&FrameId::Valid(Cow::Borrowed("TDRC"))) else {
+		panic!("Expected a TDRC frame");
+	};
+	assert_eq!(tdrc.timestamp.month, Some(6));
+	assert_eq!(tdrc.timestamp.day, Some(3));
+}
+
 macro_rules! popm_tests {
 		(
 			$($tagger_name:ident => $(($tagger_value:expr, $mapped_value:literal)),+);* $(;)?
