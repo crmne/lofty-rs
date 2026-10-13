@@ -111,6 +111,9 @@ pub enum EventType {
 	AudioFileEnds = 0xFE,
 
 	/// Reserved event type (0x17..=0xDF and 0xF0..=0xFC)
+	///
+	/// A reserved event read from a frame is written back with its original byte. One that was not
+	/// read from a frame has no byte to write, and is skipped when the frame is written.
 	Reserved,
 }
 
@@ -224,6 +227,9 @@ pub struct EventTimingCodesFrame<'a> {
 	/// Events are guaranteed to be sorted by their timestamps when read. They can be inserted in
 	/// arbitrary order after the fact, and will be sorted again prior to writing.
 	pub events: Cow<'a, [Event]>,
+	/// The timestamps and original bytes of the [`EventType::Reserved`] events that were read, in
+	/// order, so that they can be written back unchanged
+	pub(crate) reserved_event_types: Cow<'a, [(u32, u8)]>,
 }
 
 impl<'a> EventTimingCodesFrame<'a> {
@@ -234,6 +240,7 @@ impl<'a> EventTimingCodesFrame<'a> {
 			header,
 			timestamp_format,
 			events: events.into(),
+			reserved_event_types: Cow::Borrowed(&[]),
 		}
 	}
 
@@ -284,20 +291,34 @@ impl<'a> EventTimingCodesFrame<'a> {
 				let event_type = EventType::from_u8(event_type_byte);
 				let timestamp = reader.read_u32::<BigEndian>()?;
 
-				events.push(Event {
-					event_type,
-					timestamp,
-				})
+				events.push((
+					Event {
+						event_type,
+						timestamp,
+					},
+					event_type_byte,
+				));
 			}
 
 			// Order is important, can't use sort_unstable
-			events.sort();
+			events.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+			let reserved_event_types = events
+				.iter()
+				.filter(|(event, _)| event.event_type == EventType::Reserved)
+				.map(|(event, byte)| (event.timestamp, *byte))
+				.collect::<Vec<_>>();
+			let events = events
+				.into_iter()
+				.map(|(event, _)| event)
+				.collect::<Vec<_>>();
 
 			let header = FrameHeader::new(FRAME_ID, frame_flags);
 			Ok(Some(EventTimingCodesFrame {
 				header,
 				timestamp_format,
 				events: Cow::Owned(events),
+				reserved_event_types: Cow::Owned(reserved_event_types),
 			}))
 		}
 
@@ -311,6 +332,9 @@ impl<'a> EventTimingCodesFrame<'a> {
 	///
 	/// NOTE: This will sort all events according to their timestamps
 	///
+	/// [`EventType::Reserved`] events are written with the byte they were read with, matched by
+	/// timestamp. Those without one are skipped, since the reserved type is unknown.
+	///
 	/// # Errors
 	///
 	/// * [`AllocationError`]
@@ -323,8 +347,33 @@ impl<'a> EventTimingCodesFrame<'a> {
 		let mut sorted_events = self.events.iter().collect::<Vec<_>>();
 		sorted_events.sort();
 
+		let mut reserved_event_types = self
+			.reserved_event_types
+			.iter()
+			.map(|&(timestamp, byte)| (timestamp, Some(byte)))
+			.collect::<Vec<_>>();
+
 		for event in sorted_events {
-			content.push(event.event_type as u8);
+			let event_type_byte = if event.event_type == EventType::Reserved {
+				let original = reserved_event_types
+					.iter_mut()
+					.find(|(timestamp, byte)| *timestamp == event.timestamp && byte.is_some())
+					.and_then(|(_, byte)| byte.take());
+
+				let Some(byte) = original else {
+					log::warn!(
+						"Skipping a reserved ETCO event at {} with no event type to write",
+						event.timestamp
+					);
+					continue;
+				};
+
+				byte
+			} else {
+				event.event_type as u8
+			};
+
+			content.push(event_type_byte);
 			content.extend(event.timestamp.to_be_bytes())
 		}
 
@@ -338,6 +387,7 @@ impl EventTimingCodesFrame<'_> {
 			header: self.header.borrow(),
 			timestamp_format: self.timestamp_format,
 			events: Cow::Borrowed(&self.events),
+			reserved_event_types: Cow::Borrowed(&self.reserved_event_types),
 		}
 	}
 }
@@ -393,5 +443,50 @@ mod tests {
 			crate::tag::utils::test_utils::read_path("tests/tags/assets/id3v2/test.etco");
 
 		assert_eq!(encoded, expected_bytes);
+	}
+
+	#[test_log::test]
+	fn etco_reserved_event_types() {
+		// Reserved event types, out of order
+		let mut cont = vec![TimestampFormat::MS as u8];
+		for (event_type, timestamp) in [(0xF0_u8, 20_u32), (0x17, 10), (0x02, 15), (0xDF, 20)] {
+			cont.push(event_type);
+			cont.extend(timestamp.to_be_bytes());
+		}
+
+		let parsed_etco = EventTimingCodesFrame::parse(&mut &cont[..], FrameFlags::default())
+			.unwrap()
+			.unwrap();
+		let event_types = parsed_etco
+			.events
+			.iter()
+			.map(|e| e.event_type)
+			.collect::<Vec<_>>();
+		assert_eq!(
+			event_types,
+			[
+				EventType::Reserved,
+				EventType::IntroStart,
+				EventType::Reserved,
+				EventType::Reserved
+			]
+		);
+
+		// Reserved events used to be written as 0xFF. They are now written with their own bytes,
+		// sorted by time.
+		let mut expected = vec![TimestampFormat::MS as u8];
+		for (event_type, timestamp) in [(0x17_u8, 10_u32), (0x02, 15), (0xF0, 20), (0xDF, 20)] {
+			expected.push(event_type);
+			expected.extend(timestamp.to_be_bytes());
+		}
+		assert_eq!(parsed_etco.as_bytes().unwrap(), expected);
+
+		// A reserved event that was not read has no type to write
+		let mut edited = parsed_etco.clone();
+		edited.events.to_mut().push(Event {
+			event_type: EventType::Reserved,
+			timestamp: 30,
+		});
+		assert_eq!(edited.as_bytes().unwrap(), expected);
 	}
 }
