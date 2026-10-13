@@ -1051,6 +1051,30 @@ fn genres_id_remix_cover() {
 }
 
 #[test_log::test]
+fn genres_id3v23_escaped_refinement_round_trip() {
+	for (value, expected) in [
+		("((Drum & Bass)", &["(Drum & Bass)"][..]),
+		("(Drum & Bass)", &["Drum & Bass"]),
+		(
+			"(26)(55)((I think...)",
+			&["Ambient", "Dream", "(I think...)"],
+		),
+		("(Unclosed", &["(Unclosed"]),
+	] {
+		let tag = id3v2_tag_with_genre(value);
+		assert_eq!(tag.genres().unwrap().collect::<Vec<_>>(), expected);
+
+		let re_read = dump_and_re_read(&tag, WriteOptions::default().use_id3v23(true));
+		assert_eq!(
+			re_read.genres().unwrap().collect::<Vec<_>>(),
+			expected,
+			"written as {:?}",
+			re_read.get_text(&GENRE_ID)
+		);
+	}
+}
+
+#[test_log::test]
 fn tipl_round_trip() {
 	let mut tag = Id3v2Tag::default();
 	let mut tipl = KeyValueFrame::new(

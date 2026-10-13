@@ -177,6 +177,11 @@ where
 						"Remix" => new_genre_string.push_str("(RX)"),
 						"Cover" => new_genre_string.push_str("(CR)"),
 						_ if i == genres.len() - 1 && genre.parse::<u8>().is_err() => {
+							// A refinement that begins with a parenthesized part would be read
+							// as a genre reference, so it is escaped as "((...".
+							if genre.starts_with('(') && genre.contains(')') {
+								new_genre_string.push('(');
+							}
 							new_genre_string.push_str(genre);
 						},
 						_ => {
