@@ -1802,6 +1802,45 @@ fn id3v24_extended_header_unknown_data_is_skipped() {
 	assert_title_and_artist(&read_raw_tag(&raw_tag(4, 0x40, &body)));
 }
 
+fn dump(tag: &Id3v2Tag, write_options: WriteOptions) -> Vec<u8> {
+	let mut bytes = Vec::new();
+	tag.dump_to(&mut bytes, write_options).unwrap();
+	bytes
+}
+
+#[test_log::test]
+fn id3v23_tag_flags() {
+	use crate::id3::v2::TagRestrictions;
+
+	let mut tag = Id3v2Tag::default();
+	tag.set_title(String::from("Title"));
+	tag.set_flags(Id3v2TagFlags {
+		experimental: true,
+		footer: true,
+		crc: true,
+		restrictions: Some(TagRestrictions::default()),
+		..Id3v2TagFlags::default()
+	});
+
+	// Experimental is 0x20 in ID3v2.3 (0x40 is the extended header), and there is no footer.
+	// The extended header holds ID3v2.4 data (restrictions, and the CRC in the ID3v2.4 layout),
+	// so it is not written either.
+	let bytes = dump(
+		&tag,
+		WriteOptions::default()
+			.use_id3v23(true)
+			.preferred_padding(0),
+	);
+	assert_eq!(bytes[5], 0x20);
+
+	let re_read = read_raw_tag(&bytes);
+	assert_eq!(re_read.title().as_deref(), Some("Title"));
+	assert!(re_read.flags().experimental);
+	assert!(!re_read.flags().footer);
+	assert!(!re_read.flags().crc);
+	assert!(re_read.flags().restrictions.is_none());
+}
+
 macro_rules! popm_tests {
 		(
 			$($tagger_name:ident => $(($tagger_value:expr, $mapped_value:literal)),+);* $(;)?

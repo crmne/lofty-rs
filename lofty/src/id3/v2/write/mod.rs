@@ -110,11 +110,24 @@ pub(super) fn create_tag<'a, I: Iterator<Item = Frame<'a>> + 'a>(
 		log::debug!("Using ID3v2.3");
 	}
 
-	let has_footer = tag.flags.footer;
-	let needs_crc = tag.flags.crc;
-	let has_restrictions = tag.flags.restrictions.is_some();
+	let mut flags = tag.flags;
+	if is_id3v23 {
+		// ID3v2.3 has no footer or tag restrictions, and its extended header has a different
+		// layout, which we do not write. The CRC is dropped along with it.
+		if flags.footer || flags.crc || flags.restrictions.is_some() {
+			log::warn!("Discarding the footer, CRC, and restrictions flags for ID3v2.3");
+		}
 
-	let (mut id3v2, extended_header_len) = create_tag_header(tag.flags, is_id3v23)?;
+		flags.footer = false;
+		flags.crc = false;
+		flags.restrictions = None;
+	}
+
+	let has_footer = flags.footer;
+	let needs_crc = flags.crc;
+	let has_restrictions = flags.restrictions.is_some();
+
+	let (mut id3v2, extended_header_len) = create_tag_header(flags, is_id3v23)?;
 	let header_len = id3v2.get_ref().len();
 
 	// Write the items

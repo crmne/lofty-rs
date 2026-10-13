@@ -39,7 +39,7 @@ pub struct Id3v2TagFlags {
 	pub experimental: bool,
 	/// Indicates that the tag includes a footer
 	///
-	/// A footer will be created if the tag is written
+	/// A footer will be created if the tag is written as ID3v2.4. ID3v2.3 has no footer.
 	pub footer: bool,
 	/// Whether or not to include a CRC-32 in the extended header
 	///
@@ -75,16 +75,13 @@ impl Id3v2TagFlags {
 
 	/// Get the **ID3v2.3** byte representation of the flags
 	///
-	/// NOTE: This does not include the extended header flags
+	/// NOTE: This does not include the extended header flags. ID3v2.3 has no footer, so
+	///       [`Self::footer`] is not represented.
 	pub fn as_id3v23_byte(&self) -> u8 {
 		let mut byte = 0;
 
 		if self.experimental {
-			byte |= 0x40;
-		}
-
-		if self.footer {
-			byte |= 0x10;
+			byte |= 0x20;
 		}
 
 		byte
@@ -137,8 +134,8 @@ impl Id3v2Header {
 			unsynchronisation: flags & 0x80 == 0x80,
 			experimental: (version == Id3v2Version::V4 || version == Id3v2Version::V3)
 				&& flags & 0x20 == 0x20,
-			footer: (version == Id3v2Version::V4 || version == Id3v2Version::V3)
-				&& flags & 0x10 == 0x10,
+			// ID3v2.3 has no footer
+			footer: version == Id3v2Version::V4 && flags & 0x10 == 0x10,
 			crc: false,         // Retrieved later if applicable
 			restrictions: None, // Retrieved later if applicable
 		};
