@@ -1659,6 +1659,149 @@ fn invalid_language_is_read_and_written_as_unknown() {
 	}
 }
 
+/// A raw ID3v2.`major` text frame with a Latin-1 `value`
+fn raw_text_frame(major: u8, id: &[u8], value: &str) -> Vec<u8> {
+	use crate::id3::v2::util::synchsafe::SynchsafeInteger;
+
+	let len = value.len() as u32 + 1;
+	let mut frame = id.to_vec();
+	match major {
+		2 => frame.extend(&len.to_be_bytes()[1..]),
+		3 => frame.extend(len.to_be_bytes()),
+		_ => frame.extend(len.synch().unwrap().to_be_bytes()),
+	}
+	if major > 2 {
+		frame.extend([0, 0]);
+	}
+	frame.push(0);
+	frame.extend(value.as_bytes());
+	frame
+}
+
+/// A raw ID3v2.`major` tag: the header followed by `body`
+fn raw_tag(major: u8, flags: u8, body: &[u8]) -> Vec<u8> {
+	use crate::id3::v2::util::synchsafe::SynchsafeInteger;
+
+	let mut tag = vec![b'I', b'D', b'3', major, 0, flags];
+	tag.extend((body.len() as u32).synch().unwrap().to_be_bytes());
+	tag.extend(body);
+	tag
+}
+
+/// Read a raw tag strictly, checking that its whole size is accounted for
+fn read_raw_tag(bytes: &[u8]) -> Id3v2Tag {
+	let mut reader = Cursor::new(bytes);
+	let header = Id3v2Header::parse(&mut reader).unwrap();
+	assert_eq!(header.full_tag_size() as usize, bytes.len());
+
+	let tag = crate::id3::v2::read::parse_id3v2(
+		&mut reader,
+		header,
+		ParseOptions::new().parsing_mode(ParsingMode::Strict),
+	)
+	.unwrap();
+	assert_eq!(reader.position() as usize, bytes.len());
+	tag
+}
+
+fn title_and_artist(major: u8) -> Vec<u8> {
+	[
+		raw_text_frame(major, b"TIT2", "Title"),
+		raw_text_frame(major, b"TPE1", "Artist"),
+	]
+	.concat()
+}
+
+fn assert_title_and_artist(tag: &Id3v2Tag) {
+	assert_eq!(tag.title().as_deref(), Some("Title"));
+	assert_eq!(tag.artist().as_deref(), Some("Artist"));
+}
+
+#[test_log::test]
+fn id3v23_extended_header() {
+	// Size (excluding itself), flags (2 bytes), size of padding
+	let mut body = 6_u32.to_be_bytes().to_vec();
+	body.extend([0, 0]);
+	body.extend(0_u32.to_be_bytes());
+	body.extend(title_and_artist(3));
+
+	let tag = read_raw_tag(&raw_tag(3, 0x40, &body));
+	assert_title_and_artist(&tag);
+	assert!(!tag.flags().crc);
+}
+
+#[test_log::test]
+fn id3v23_extended_header_with_crc() {
+	// Size (excluding itself), flags (0x8000 = CRC present), size of padding, CRC
+	let mut body = 10_u32.to_be_bytes().to_vec();
+	body.extend([0x80, 0]);
+	body.extend(0_u32.to_be_bytes());
+	body.extend([0x12, 0x34, 0x56, 0x78]);
+	body.extend(title_and_artist(3));
+
+	let tag = read_raw_tag(&raw_tag(3, 0x40, &body));
+	assert_title_and_artist(&tag);
+	assert!(tag.flags().crc);
+}
+
+#[test_log::test]
+fn id3v23_unsynchronised_extended_header() {
+	// The extended header is unsynchronised with the rest of the tag: the 0xFF in the padding
+	// size is followed by an inserted 0x00.
+	let mut body = 6_u32.to_be_bytes().to_vec();
+	body.extend([0, 0]);
+	body.extend([0, 0, 0, 0xFF, 0x00]);
+	body.extend(title_and_artist(3));
+
+	let tag = read_raw_tag(&raw_tag(3, 0xC0, &body));
+	assert_title_and_artist(&tag);
+}
+
+#[test_log::test]
+fn id3v24_extended_header_flag_data() {
+	use crate::id3::v2::util::synchsafe::SynchsafeInteger;
+
+	// Tag is an update (no data), CRC (5 bytes), restrictions (1 byte)
+	let mut body = 15_u32.synch().unwrap().to_be_bytes().to_vec();
+	body.extend([1, 0x70]);
+	body.extend([0]);
+	body.extend([5, 0x01, 0x02, 0x03, 0x04, 0x05]);
+	body.extend([1, 0b1000_0000]);
+	body.extend(title_and_artist(4));
+
+	let tag = read_raw_tag(&raw_tag(4, 0x40, &body));
+	assert_title_and_artist(&tag);
+	assert!(tag.flags().crc);
+	assert_eq!(
+		tag.flags().restrictions.map(|r| r.size),
+		Some(crate::id3::v2::TagSizeRestrictions::S_32F_40K)
+	);
+}
+
+#[test_log::test]
+fn id3v24_extended_header_with_update_flag() {
+	use crate::id3::v2::util::synchsafe::SynchsafeInteger;
+
+	// The "tag is an update" flag has a data length byte of 0, which made the header 7 bytes
+	let mut body = 7_u32.synch().unwrap().to_be_bytes().to_vec();
+	body.extend([1, 0x40, 0]);
+	body.extend(title_and_artist(4));
+
+	assert_title_and_artist(&read_raw_tag(&raw_tag(4, 0x40, &body)));
+}
+
+#[test_log::test]
+fn id3v24_extended_header_unknown_data_is_skipped() {
+	use crate::id3::v2::util::synchsafe::SynchsafeInteger;
+
+	// No flags set, but the declared size covers 2 more bytes
+	let mut body = 8_u32.synch().unwrap().to_be_bytes().to_vec();
+	body.extend([1, 0, 0xAB, 0xCD]);
+	body.extend(title_and_artist(4));
+
+	assert_title_and_artist(&read_raw_tag(&raw_tag(4, 0x40, &body)));
+}
+
 macro_rules! popm_tests {
 		(
 			$($tagger_name:ident => $(($tagger_value:expr, $mapped_value:literal)),+);* $(;)?
