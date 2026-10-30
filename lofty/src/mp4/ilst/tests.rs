@@ -47,6 +47,80 @@ fn verify_atom(ilst: &Ilst, ident: [u8; 4], data: &AtomData) {
 }
 
 #[test_log::test]
+fn unsupported_integer_widths_survive_strict_roundtrip() {
+	for code in [DataType::BeSignedInteger, DataType::BeUnsignedInteger] {
+		for length in [5, 8, 16, 37] {
+			let ident = AtomIdent::Freeform {
+				mean: Cow::Borrowed("com.apple.iTunes"),
+				name: Cow::Borrowed("tool"),
+			};
+			let data = AtomData::Unknown {
+				code,
+				data: vec![0xA5; length],
+			};
+			let mut tag = Ilst::new();
+			tag.insert(Atom::new(ident.clone(), data.clone()));
+			let mut original = Vec::new();
+			tag.dump_to(&mut original, WriteOptions::default()).unwrap();
+			let parsed = read_ilst_raw(
+				&original[8..],
+				ParseOptions::new().parsing_mode(ParsingMode::Strict),
+			);
+			assert_eq!(parsed.get(&ident).unwrap().data().next(), Some(&data));
+			let mut rewritten = Vec::new();
+			parsed
+				.dump_to(&mut rewritten, WriteOptions::default())
+				.unwrap();
+			assert_eq!(rewritten, original);
+		}
+	}
+}
+
+#[test_log::test]
+fn mp4_edit_preserves_tool_with_unsupported_integer_width() {
+	let mut file = Cursor::new(read_path("tests/files/assets/ilst_trailing_padding.m4a"));
+	let options = ParseOptions::new()
+		.parsing_mode(ParsingMode::Strict)
+		.read_properties(false);
+	let ident = AtomIdent::Freeform {
+		mean: Cow::Borrowed("com.apple.iTunes"),
+		name: Cow::Borrowed("tool"),
+	};
+	let data = AtomData::Unknown {
+		code: DataType::BeSignedInteger,
+		data: b"legacy encoder".to_vec(),
+	};
+	let mut tag = Mp4File::read_from(&mut file, options)
+		.unwrap()
+		.ilst()
+		.unwrap()
+		.clone();
+	tag.insert(Atom::new(ident.clone(), data.clone()));
+	file.rewind().unwrap();
+	tag.save_to(&mut file, WriteOptions::default()).unwrap();
+	file.rewind().unwrap();
+	let mut read = Mp4File::read_from(&mut file, options)
+		.unwrap()
+		.ilst()
+		.unwrap()
+		.clone();
+	assert_eq!(read.get(&ident).unwrap().data().next(), Some(&data));
+	read.set_title("Edited without losing the encoder tag".into());
+	file.rewind().unwrap();
+	read.save_to(&mut file, WriteOptions::default()).unwrap();
+	file.rewind().unwrap();
+	let after = Mp4File::read_from(&mut file, options).unwrap();
+	assert_eq!(
+		after.ilst().unwrap().get(&ident).unwrap().data().next(),
+		Some(&data)
+	);
+	assert_eq!(
+		after.ilst().unwrap().title().as_deref(),
+		Some("Edited without losing the encoder tag")
+	);
+}
+
+#[test_log::test]
 fn parse_ilst() {
 	let mut expected_tag = Ilst::default();
 

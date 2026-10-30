@@ -31,6 +31,7 @@ those commits need the helpers too.
 | ID3v2: Escape ID3v2.3 genre refinements that begin with "(" | `((Drum & Bass)` was read as the genre `(Drum & Bass)` but written as `(Drum & Bass)`, which reads back as `Drum & Bass`. | None |
 | ID3v2: Merge ID3v2.2 TDA and TIM frames into TDRC | ID3v2.2 date and time frames were left as outdated frames that cannot be written, so a save kept only the year. They are merged into TDRC like ID3v2.3 TDAT and TIME. A TDRC frame that already has a month is no longer discarded. | None |
 | Add end-to-end ID3v2 round trip tests | Solco's reproducers, built from synthetic bytes and run through `MpegFile`, `WavFile` and `AiffFile`. Tests ending in `_by_design` pin behaviour Solco relies on. | Solco only |
+| MP4: Preserve integer atoms wider than the numeric representation | A legacy `----:com.apple.iTunes:tool` value marked as an integer blocked strict parsing and was dropped by best-attempt parsing. Unsupported nonempty widths now remain opaque bytes, including their integer type, through an unrelated edit. Strict malformed-string checks stay. | None |
 | Add SOLCO.md | This file. | Solco only |
 
 ## Left unchanged

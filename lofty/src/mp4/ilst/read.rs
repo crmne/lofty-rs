@@ -442,8 +442,12 @@ fn interpret_atom_content(flags: DataType, content: Vec<u8>) -> Result<AtomData,
 	Ok(match flags {
 		DataType::Utf8 => AtomData::UTF8(utf8_decode(content)?),
 		DataType::Utf16 => AtomData::UTF16(utf16_decode_bytes(&content, u16::from_be_bytes)?),
-		DataType::BeSignedInteger => AtomData::SignedInteger(parse_int(&content)?),
-		DataType::BeUnsignedInteger => AtomData::UnsignedInteger(parse_uint(&content)?),
+		DataType::BeSignedInteger if (1..=4).contains(&content.len()) => {
+			AtomData::SignedInteger(parse_int(&content)?)
+		},
+		DataType::BeUnsignedInteger if (1..=4).contains(&content.len()) => {
+			AtomData::UnsignedInteger(parse_uint(&content)?)
+		},
 		code => AtomData::Unknown {
 			code,
 			data: content,
