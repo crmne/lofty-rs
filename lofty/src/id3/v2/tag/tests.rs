@@ -1885,6 +1885,53 @@ fn frame_content_that_fails_to_parse_is_skipped() {
 	);
 }
 
+/// UTF-16 text with a BOM and a terminator, after its encoding byte
+fn utf16_text_content(value: &str) -> Vec<u8> {
+	let mut content = vec![1, 0xFF, 0xFE];
+	for unit in value.encode_utf16().chain([0]) {
+		content.extend(unit.to_le_bytes());
+	}
+	content
+}
+
+#[test_log::test]
+fn wfed_written_as_text() {
+	// iTunes writes its podcast URL as a text frame
+	let mut body = raw_v4_frame(b"WFED", &utf16_text_content("https://example.org/feed"));
+	body.extend(title_and_artist(4));
+
+	let tag = read_raw_tag(&raw_tag(4, 0, &body));
+	assert_title_and_artist(&tag);
+	let Some(Frame::Text(wfed)) = tag.get(&FrameId::Valid(Cow::Borrowed("WFED"))) else {
+		panic!("Expected a text frame");
+	};
+	assert_eq!(wfed.value, "https://example.org/feed");
+	assert_eq!(wfed.encoding, TextEncoding::UTF16);
+
+	// And it is written back as it was read
+	let tag = read_tag_with_options(
+		&dump(&tag, WriteOptions::default()),
+		ParseOptions::new().parsing_mode(ParsingMode::Strict),
+	);
+	let Some(Frame::Text(wfed)) = tag.get(&FrameId::Valid(Cow::Borrowed("WFED"))) else {
+		panic!("Expected a text frame");
+	};
+	assert_eq!(wfed.value, "https://example.org/feed");
+}
+
+#[test_log::test]
+fn wfed_written_as_url() {
+	let mut body = raw_v4_frame(b"WFED", b"https://example.org/feed");
+	body.extend(title_and_artist(4));
+
+	let tag = read_raw_tag(&raw_tag(4, 0, &body));
+	assert_title_and_artist(&tag);
+	let Some(Frame::Url(wfed)) = tag.get(&FrameId::Valid(Cow::Borrowed("WFED"))) else {
+		panic!("Expected a URL frame");
+	};
+	assert_eq!(wfed.url(), "https://example.org/feed");
+}
+
 fn dump(tag: &Id3v2Tag, write_options: WriteOptions) -> Vec<u8> {
 	let mut bytes = Vec::new();
 	tag.dump_to(&mut bytes, write_options).unwrap();

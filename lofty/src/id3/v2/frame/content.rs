@@ -67,6 +67,9 @@ pub(super) fn parse_content<R: Read>(
 		"GRP1" | "MVNM" | "MVIN" => TextInformationFrame::parse(reader, id, flags, version)
 			.transpose()?
 			.map(Frame::Text),
+		// iTunes writes WFED as a text frame, with a text encoding, but other apps write it as a
+		// URL frame. A URL can't start with a text encoding byte (0-3), so that tells them apart.
+		"WFED" => parse_wfed(reader, id, flags, version)?,
 		i if i.starts_with('W') => UrlLinkFrame::parse(reader, id, flags)
 			.transpose()?
 			.map(Frame::Url),
@@ -77,6 +80,29 @@ pub(super) fn parse_content<R: Read>(
 		// SYLT, GEOB, and any unknown frames
 		_ => BinaryFrame::parse(reader, id, flags).map(Frame::Binary),
 	})
+}
+
+fn parse_wfed<R: Read>(
+	reader: &mut R,
+	id: FrameId<'static>,
+	flags: FrameFlags,
+	version: Id3v2Version,
+) -> Option<Result<Frame<'static>, FrameParseError>> {
+	let mut content = Vec::new();
+	if let Err(e) = reader.read_to_end(&mut content) {
+		return Some(Err(FrameParseError::new(Some(id), Box::new(e))));
+	}
+
+	let reader = &mut &content[..];
+	if content.first().is_some_and(|encoding| *encoding <= 3) {
+		return TextInformationFrame::parse(reader, id, flags, version)
+			.transpose()
+			.map(|frame| frame.map(Frame::Text));
+	}
+
+	UrlLinkFrame::parse(reader, id, flags)
+		.transpose()
+		.map(|frame| frame.map(Frame::Url))
 }
 
 pub(in crate::id3::v2) fn verify_encoding(

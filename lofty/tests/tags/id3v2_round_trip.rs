@@ -571,3 +571,63 @@ fn mpeg_with_valid_id3v2_and_malformed_ape_footer_is_readable() {
 fn parse_input_with_title() -> Vec<u8> {
 	[tag(4, 0, &frame(4, b"TIT2", &text("Title"))), mpeg_audio()].concat()
 }
+
+/// UTF-16 text with a BOM and a terminator, after its encoding byte.
+fn utf16(value: &str) -> Vec<u8> {
+	let mut out = vec![1, 0xFF, 0xFE];
+	for unit in value.encode_utf16().chain([0]) {
+		out.extend(unit.to_le_bytes());
+	}
+	out
+}
+
+#[test]
+fn frames_after_a_wfed_frame_written_as_text_are_read() {
+	// iTunes's podcast URL, written as UTF-16 text, at the start of the tag. The URL reader
+	// stopped at its first null byte and read the rest of the frame as the next frame.
+	let body = [
+		frame(4, b"WFED", &utf16("https://example.org/feed")),
+		frame(4, b"TIT2", &utf16("Title")),
+		frame(4, b"TALB", &text("Album")),
+		frame(4, b"TCON", &text("Breakbeat")),
+		frame(4, b"TPE2", &text("Album Artist")),
+	]
+	.concat();
+	let bytes = [tag(4, 0, &body), mpeg_audio()].concat();
+
+	for mode in [
+		ParsingMode::Strict,
+		ParsingMode::BestAttempt,
+		ParsingMode::Relaxed,
+	] {
+		let file = read_mpeg(bytes.clone(), mode).unwrap_or_else(|e| {
+			panic!(
+				"{mode:?}: {e}: {:?}",
+				std::error::Error::source(&e).map(ToString::to_string)
+			)
+		});
+		let id3v2 = file.id3v2().expect("an ID3v2 tag");
+		assert_eq!(id3v2.title().as_deref(), Some("Title"), "{mode:?}");
+		assert_eq!(id3v2.album().as_deref(), Some("Album"), "{mode:?}");
+		assert_eq!(id3v2.genre().as_deref(), Some("Breakbeat"), "{mode:?}");
+		assert_eq!(
+			id3v2.get_text(&id("TPE2")),
+			Some("Album Artist"),
+			"{mode:?}"
+		);
+		assert_eq!(
+			id3v2.get_text(&id("WFED")),
+			Some("https://example.org/feed")
+		);
+	}
+
+	// Saved and read again, every frame is kept
+	let id3v2 = parse(&tag(4, 0, &body));
+	let saved = parse(&dump(&id3v2, false).unwrap());
+	assert_eq!(
+		saved.get_text(&id("WFED")),
+		Some("https://example.org/feed")
+	);
+	assert_eq!(saved.album().as_deref(), Some("Album"));
+	assert_eq!(saved.get_text(&id("TPE2")), Some("Album Artist"));
+}
