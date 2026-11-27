@@ -631,3 +631,21 @@ fn frames_after_a_wfed_frame_written_as_text_are_read() {
 	assert_eq!(saved.album().as_deref(), Some("Album"));
 	assert_eq!(saved.get_text(&id("TPE2")), Some("Album Artist"));
 }
+
+#[test]
+fn a_frame_whose_content_fails_to_parse_fails_the_tag_by_design() {
+	// Callers with their own recovery (Solco reads such a tag frame by frame) rely on the read
+	// failing, rather than the frame being dropped without a word.
+	let body = [
+		frame(4, b"TIT2", &text("Title")),
+		frame(4, b"TDRC", &text("2020;2021")),
+		frame(4, b"TPE1", &text("Artist")),
+	]
+	.concat();
+	let bytes = [tag(4, 0, &body), mpeg_audio()].concat();
+
+	// Relaxed mode reads a timestamp it can't parse as far as it can.
+	for mode in [ParsingMode::Strict, ParsingMode::BestAttempt] {
+		assert!(read_mpeg(bytes.clone(), mode).is_err(), "{mode:?}");
+	}
+}

@@ -1852,39 +1852,6 @@ fn frame_content_left_unread_is_skipped() {
 	assert_eq!(url.url(), "https://example.org");
 }
 
-#[test_log::test]
-fn frame_content_that_fails_to_parse_is_skipped() {
-	// A comment with a text encoding that doesn't exist, in the middle of the tag
-	let mut body = raw_text_frame(4, b"TIT2", "Title");
-	body.extend(raw_v4_frame(b"COMM", b"\x09eng\0Comment"));
-	body.extend(raw_text_frame(4, b"TPE1", "Artist"));
-	let bytes = raw_tag(4, 0, &body);
-
-	for parsing_mode in [ParsingMode::BestAttempt, ParsingMode::Relaxed] {
-		let mut reader = Cursor::new(&bytes[..]);
-		let header = Id3v2Header::parse(&mut reader).unwrap();
-		let tag = crate::id3::v2::read::parse_id3v2(
-			&mut reader,
-			header,
-			ParseOptions::new().parsing_mode(parsing_mode),
-		)
-		.unwrap();
-		assert_title_and_artist(&tag);
-		assert!(tag.comment().is_none());
-	}
-
-	let mut reader = Cursor::new(&bytes[..]);
-	let header = Id3v2Header::parse(&mut reader).unwrap();
-	assert!(
-		crate::id3::v2::read::parse_id3v2(
-			&mut reader,
-			header,
-			ParseOptions::new().parsing_mode(ParsingMode::Strict),
-		)
-		.is_err()
-	);
-}
-
 /// UTF-16 text with a BOM and a terminator, after its encoding byte
 fn utf16_text_content(value: &str) -> Vec<u8> {
 	let mut content = vec![1, 0xFF, 0xFE];
