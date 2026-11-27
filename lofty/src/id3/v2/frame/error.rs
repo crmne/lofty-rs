@@ -59,6 +59,28 @@ impl FrameParseError {
 		)
 	}
 
+	/// Whether the frame can be skipped in favour of the frames after it
+	///
+	/// Allocation errors (such as exceeding [`GlobalOptions::allocation_limit()`]) and I/O errors
+	/// other than the frame ending early are not. They are about the file as a whole, not the
+	/// content of this frame.
+	///
+	/// [`GlobalOptions::allocation_limit()`]: crate::config::GlobalOptions::allocation_limit
+	pub(crate) fn is_frame_content_error(&self) -> bool {
+		let Some(source) = self.source.as_deref() else {
+			return true;
+		};
+
+		if source.is::<AllocationError>() {
+			return false;
+		}
+
+		match source.downcast_ref::<std::io::Error>() {
+			Some(io) => io.kind() == std::io::ErrorKind::UnexpectedEof,
+			None => true,
+		}
+	}
+
 	pub(crate) fn message(
 		id: Option<FrameId<'static>>,
 		message: impl Into<Cow<'static, str>>,

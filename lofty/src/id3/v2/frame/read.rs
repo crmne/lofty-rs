@@ -68,6 +68,38 @@ impl ParsedFrame<'static> {
 			flags.unsynchronisation = true;
 		}
 
+		// The next frame starts `size` bytes after this header, whatever the content parser makes
+		// of the content. It may stop before the end (a URL ends at its first null byte, for
+		// example), or fail part way through, so skip whatever it leaves unread.
+		let mut frame_reader = reader.take(u64::from(size));
+		let parsed = Self::read_content(&mut frame_reader, size, id, flags, version, parse_options);
+		if let Err(e) = std::io::copy(&mut frame_reader, &mut std::io::sink()) {
+			return Err(FrameParseError::io(None, e));
+		}
+
+		match parsed {
+			Err(err)
+				if parse_options.parsing_mode != ParsingMode::Strict
+					&& err.is_frame_content_error() =>
+			{
+				log::warn!("Failed to read frame content, skipping: {}", err);
+				Ok(Self::Skip)
+			},
+			parsed => parsed,
+		}
+	}
+
+	fn read_content<R>(
+		reader: &mut std::io::Take<&mut R>,
+		mut size: u32,
+		id: FrameId<'static>,
+		mut flags: FrameFlags,
+		version: Id3v2Version,
+		parse_options: ParseOptions,
+	) -> Result<Self, FrameParseError>
+	where
+		R: Read + ?Sized,
+	{
 		if size == 0 {
 			if parse_options.parsing_mode == ParsingMode::Strict {
 				return Err(FrameParseError::undersized(id));

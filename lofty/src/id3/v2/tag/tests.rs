@@ -1826,6 +1826,65 @@ fn id3v24_extended_header_unknown_data_is_skipped() {
 	assert_title_and_artist(&read_raw_tag(&raw_tag(4, 0x40, &body)));
 }
 
+/// A raw ID3v2.4 frame holding `content` as it is
+fn raw_v4_frame(id: &[u8], content: &[u8]) -> Vec<u8> {
+	use crate::id3::v2::util::synchsafe::SynchsafeInteger;
+
+	let mut frame = id.to_vec();
+	frame.extend((content.len() as u32).synch().unwrap().to_be_bytes());
+	frame.extend([0, 0]);
+	frame.extend(content);
+	frame
+}
+
+#[test_log::test]
+fn frame_content_left_unread_is_skipped() {
+	// A URL ends at its first null byte. The bytes after it are still part of the frame, and
+	// must not be read as the next frame's header.
+	let mut body = raw_v4_frame(b"WOAR", b"https://example.org\0\xFF\xFEjunk after the URL");
+	body.extend(title_and_artist(4));
+
+	let tag = read_raw_tag(&raw_tag(4, 0, &body));
+	assert_title_and_artist(&tag);
+	let Some(Frame::Url(url)) = tag.get(&FrameId::Valid(Cow::Borrowed("WOAR"))) else {
+		panic!("Expected a URL frame");
+	};
+	assert_eq!(url.url(), "https://example.org");
+}
+
+#[test_log::test]
+fn frame_content_that_fails_to_parse_is_skipped() {
+	// A comment with a text encoding that doesn't exist, in the middle of the tag
+	let mut body = raw_text_frame(4, b"TIT2", "Title");
+	body.extend(raw_v4_frame(b"COMM", b"\x09eng\0Comment"));
+	body.extend(raw_text_frame(4, b"TPE1", "Artist"));
+	let bytes = raw_tag(4, 0, &body);
+
+	for parsing_mode in [ParsingMode::BestAttempt, ParsingMode::Relaxed] {
+		let mut reader = Cursor::new(&bytes[..]);
+		let header = Id3v2Header::parse(&mut reader).unwrap();
+		let tag = crate::id3::v2::read::parse_id3v2(
+			&mut reader,
+			header,
+			ParseOptions::new().parsing_mode(parsing_mode),
+		)
+		.unwrap();
+		assert_title_and_artist(&tag);
+		assert!(tag.comment().is_none());
+	}
+
+	let mut reader = Cursor::new(&bytes[..]);
+	let header = Id3v2Header::parse(&mut reader).unwrap();
+	assert!(
+		crate::id3::v2::read::parse_id3v2(
+			&mut reader,
+			header,
+			ParseOptions::new().parsing_mode(ParsingMode::Strict),
+		)
+		.is_err()
+	);
+}
+
 fn dump(tag: &Id3v2Tag, write_options: WriteOptions) -> Vec<u8> {
 	let mut bytes = Vec::new();
 	tag.dump_to(&mut bytes, write_options).unwrap();
